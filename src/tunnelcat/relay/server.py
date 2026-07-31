@@ -65,6 +65,7 @@ class RelayServer:
         self.session_timeout = session_timeout
         self._pending: dict[str, PendingEntry] = {}
         self._server: asyncio.base_events.Server | None = None
+        self._sweep_task: asyncio.Task | None = None
 
     async def serve_forever(self) -> None:
         self._server = await asyncio.start_server(self._handle_conn, self.bind_host, self.bind_port)
@@ -73,7 +74,9 @@ class RelayServer:
             self.self_label = f"{self.bind_host}:{self.bind_port}"
         addrs = ", ".join(str(s.getsockname()) for s in self._server.sockets)
         logger.info("relay listening on %s", addrs)
-        asyncio.create_task(self._sweep_expired())
+        # Stored on self, not fire-and-forget: asyncio only weak-refs
+        # tasks, so an unreferenced one can be garbage-collected mid-run.
+        self._sweep_task = asyncio.create_task(self._sweep_expired())
         async with self._server:
             await self._server.serve_forever()
 
@@ -91,6 +94,19 @@ class RelayServer:
                 if entry:
                     logger.info("expiring unmatched session %s (%s)", sid[:12], entry.label)
                     entry.writer.close()
+
+    def close_pending_sessions(self) -> None:
+        """Close every registered-but-unjoined session's socket.
+
+        A registrant that vanishes before a JOIN arrives (dropped
+        connection, abandoned pairing attempt) would otherwise sit in
+        _pending holding an open socket until _sweep_expired's timeout,
+        which defaults to five minutes. Called on server shutdown so that
+        doesn't outlive the relay process itself.
+        """
+        for entry in self._pending.values():
+            entry.writer.close()
+        self._pending.clear()
 
     def _valid_token(self, token: str) -> bool:
         return hmac.compare_digest(token or "", self.admin_token)

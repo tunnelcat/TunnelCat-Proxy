@@ -179,5 +179,19 @@ class Session:
     async def close(self) -> None:
         if self._reader_task:
             self._reader_task.cancel()
+            # Wait for the cancellation to actually be delivered rather
+            # than just requested, otherwise the task can still be pending
+            # when the event loop is torn down right after (e.g. process
+            # exit), producing a "Task was destroyed but it is pending"
+            # warning instead of a clean finish.
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
         self._framer.close()
+        # Without this, the transport can still be mid-teardown when the
+        # caller moves on (e.g. the event loop is torn down right after),
+        # leaving its StreamWriter to finalize during GC after the loop is
+        # already closed -- an unraisable "Event loop is closed" warning.
+        await self._framer.wait_closed()
         await self._shutdown()

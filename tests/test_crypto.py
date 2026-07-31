@@ -48,6 +48,8 @@ async def test_handshake_and_framing_roundtrip():
 
     framer_a.close()
     framer_b.close()
+    await framer_a.wait_closed()
+    await framer_b.wait_closed()
 
 
 @pytest.mark.asyncio
@@ -59,11 +61,15 @@ async def test_handshake_fails_with_wrong_psk():
 
     (a_r, a_w), (b_r, b_w) = await _pipe_pair()
 
-    with pytest.raises(HandshakeFailed):
-        await asyncio.gather(
-            perform_handshake(a_r, a_w, psk1, initiator=True),
-            perform_handshake(b_r, b_w, psk2, initiator=False),
-        )
+    try:
+        with pytest.raises(HandshakeFailed):
+            await asyncio.gather(
+                perform_handshake(a_r, a_w, psk1, initiator=True),
+                perform_handshake(b_r, b_w, psk2, initiator=False),
+            )
+    finally:
+        a_w.close()
+        b_w.close()
 
 
 def test_derivations_are_independent():

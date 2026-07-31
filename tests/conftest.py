@@ -36,12 +36,12 @@ async def make_relay():
         relay._server = server
         sweep_task = asyncio.create_task(relay._sweep_expired())
         serve_task = asyncio.create_task(server.serve_forever())
-        created.append((server, sweep_task, serve_task))
+        created.append((relay, server, sweep_task, serve_task))
         return relay
 
     yield _make
 
-    for server, sweep_task, serve_task in created:
+    for relay, server, sweep_task, serve_task in created:
         server.close()
         for task in (sweep_task, serve_task):
             task.cancel()
@@ -49,3 +49,7 @@ async def make_relay():
                 await asyncio.wait_for(task, timeout=5)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
+        # A session registered but never joined (e.g. the double-register
+        # test's first registrant) leaves an open socket sitting in
+        # relay._pending -- close it rather than leaking it past the test.
+        relay.close_pending_sessions()

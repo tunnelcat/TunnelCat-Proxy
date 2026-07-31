@@ -19,11 +19,29 @@ logger = logging.getLogger(__name__)
 
 
 async def run_channel_acceptor(session: Session, on_event=None) -> None:
+    # asyncio only holds a *weak* reference to a task, so a per-connection
+    # task with nothing else referencing it can be garbage-collected mid
+    # transfer, silently killing that connection. Keeping every in-flight
+    # task in this set (and discarding it only once done) prevents that.
+    background: set[asyncio.Task] = set()
     while True:
         ch = await session.accept_channel()
         if ch is None:
             return
-        asyncio.create_task(_handle(session, ch, on_event))
+        task = asyncio.create_task(_handle_logged(session, ch, on_event))
+        background.add(task)
+        task.add_done_callback(background.discard)
+
+
+async def _handle_logged(session: Session, ch, on_event) -> None:
+    # This runs as a detached background task (see run_channel_acceptor),
+    # so nothing else will ever observe an exception raised here. Without
+    # this catch-all it would just become an "exception was never
+    # retrieved" warning at GC time and the connection would die silently.
+    try:
+        await _handle(session, ch, on_event)
+    except Exception:
+        logger.exception("channel %d: relay error", ch.channel_id)
 
 
 async def _handle(session: Session, ch, on_event) -> None:

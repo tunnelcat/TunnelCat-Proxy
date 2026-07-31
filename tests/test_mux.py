@@ -71,6 +71,61 @@ async def test_data_channel_open_and_relay():
 
 
 @pytest.mark.asyncio
+async def test_drain_task_completes_on_fast_path_close():
+    """Regression test: a channel whose consumer always keeps up (so every
+    frame, including the final EOF, is delivered via the fast path) must
+    not leave its per-channel drain task permanently pending. That task
+    only self-terminates on a sentinel that the fast path -- by design --
+    never routes through it, so _push must cancel it explicitly instead.
+    Left unfixed, every such channel (the common case) leaks one task
+    forever, logged by asyncio as "Task was destroyed but it is pending"."""
+    sess_a, sess_b = await _make_sessions()
+
+    async def acceptor():
+        ch = await sess_b.accept_channel()
+        await sess_b.confirm_channel(ch)
+        assert await ch.read() == b"hi"
+        await ch.close()
+        return ch
+
+    accept_task = asyncio.create_task(acceptor())
+
+    ch_a = await sess_a.open_channel(metadata=b"x")
+    await ch_a.write(b"hi")
+    await ch_a.close()  # both directions closed -> both peers see EOF via the fast path
+    assert await ch_a.read() is None  # peer's close (EOF), fast path throughout
+
+    ch_b = await accept_task
+    for ch in (ch_a, ch_b):
+        try:
+            await asyncio.wait_for(asyncio.shield(ch._drain_task), timeout=2)
+        except asyncio.CancelledError:
+            pass
+        assert ch._drain_task.cancelled(), "drain task leaked instead of being cancelled"
+
+    await sess_a.close()
+    await sess_b.close()
+
+
+@pytest.mark.asyncio
+async def test_session_close_leaves_no_dangling_tasks():
+    """Regression test: Session.close() must fully retire its reader task
+    and transport, not just request cancellation and move on -- otherwise
+    the task (or the transport's StreamWriter, finalized after the loop
+    that owned it is gone) can be torn down mid-flight, which is exactly
+    the class of bug that produced "Task was destroyed but it is pending"
+    / "Event loop is closed" warnings in production."""
+    sess_a, sess_b = await _make_sessions()
+    reader_task_a, reader_task_b = sess_a._reader_task, sess_b._reader_task
+
+    await sess_a.close()
+    await sess_b.close()
+
+    assert reader_task_a.done()
+    assert reader_task_b.done()
+
+
+@pytest.mark.asyncio
 async def test_channel_rejection():
     sess_a, sess_b = await _make_sessions()
 

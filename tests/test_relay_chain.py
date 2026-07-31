@@ -92,6 +92,41 @@ async def test_two_hop_chain_forwards_and_splices(make_relay):
 
 
 @pytest.mark.asyncio
+async def test_close_pending_sessions_closes_unjoined_registrant(make_relay):
+    """A registrant that never gets joined (dropped connection, abandoned
+    pairing attempt) otherwise sits in relay._pending holding an open
+    socket until _sweep_expired's timeout -- up to five minutes by
+    default. close_pending_sessions() is the immediate-shutdown path for
+    that; regression test for it actually closing the socket rather than
+    just clearing the dict."""
+    relay = await make_relay(token="secret")
+    code = pairing.generate_pairing_code()
+    sid = pairing.derive_session_id(pairing.code_to_bytes(code)).hex()
+    chain = [HopTarget("127.0.0.1", relay.bind_port, "secret")]
+
+    waiting = asyncio.Event()
+
+    def on_event(ev):
+        if ev.status == "waiting_for_peer":
+            waiting.set()
+
+    reg_task = asyncio.create_task(
+        connect_through_chain(chain, W.register(sid, "secret", "operator"), sid, on_event=on_event)
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=5)
+    assert sid in relay._pending
+    pending_writer = relay._pending[sid].writer
+
+    relay.close_pending_sessions()
+
+    assert sid not in relay._pending
+    assert pending_writer.is_closing()
+
+    reg_task.cancel()
+    await asyncio.gather(reg_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_hop_denied_when_not_in_allowlist(make_relay):
     relay2 = await make_relay(token="tok2")
     relay1 = await make_relay(token="tok1", allow_next=set())  # nothing allowed

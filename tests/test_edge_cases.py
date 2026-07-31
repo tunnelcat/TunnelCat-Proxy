@@ -103,18 +103,23 @@ async def test_stalled_channel_does_not_block_sibling_channels():
 
     async def open_stalled():
         r, w = await asyncio.open_connection("127.0.0.1", socks_addr[1])
-        w.write(bytes([0x05, 1, 0x00]))
-        await w.drain()
-        await r.readexactly(2)
-        hb = b"localhost"
-        req = bytes([0x05, 0x01, 0x00, 0x03, len(hb)]) + hb + slow_port.to_bytes(2, "big")
-        w.write(req)
-        await w.drain()
-        await r.readexactly(4)
-        await r.readexactly(4 + 2)
-        # deliberately never read again -- this consumer is stalled
-        await asyncio.sleep(3)
-        w.close()
+        try:
+            w.write(bytes([0x05, 1, 0x00]))
+            await w.drain()
+            await r.readexactly(2)
+            hb = b"localhost"
+            req = bytes([0x05, 0x01, 0x00, 0x03, len(hb)]) + hb + slow_port.to_bytes(2, "big")
+            w.write(req)
+            await w.drain()
+            await r.readexactly(4)
+            await r.readexactly(4 + 2)
+            # deliberately never read again -- this consumer is stalled
+            await asyncio.sleep(3)
+        finally:
+            # Reached via cancellation (the test cancels this task well
+            # before the sleep above elapses) as much as via normal
+            # completion, so this must be a finally, not a trailing line.
+            w.close()
 
     stalled_task = asyncio.create_task(open_stalled())
     await asyncio.sleep(0.5)  # let the stalled channel's intake fill up
@@ -207,6 +212,68 @@ async def test_one_socks_client_closing_does_not_affect_others():
     await asyncio.sleep(0.1)
 
     # Session must still be fully usable afterwards.
+    resp = await _socks5_roundtrip("127.0.0.1", socks_addr[1], "localhost", target_port, b"still-alive")
+    assert resp == b"ECHO:still-alive"
+
+    target_server.close()
+    await operator.session.close()
+    await agent.session.close()
+
+
+# -- background task robustness ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_channel_handler_exception_does_not_kill_acceptor_loop(monkeypatch, caplog):
+    """Every SOCKS/-L/-R connection is serviced by a detached background
+    task (run_channel_acceptor spawns one per accepted channel with nothing
+    else referencing it). Regression test for two ways that used to go
+    wrong: an exception inside one of those tasks got silently dropped
+    (never logged, connection just died with no trace) instead of being
+    caught and reported, and there was no guarantee the acceptor loop
+    itself kept running for the next connection afterwards."""
+    import logging
+
+    from tunnelcat.mux.channel import Channel
+
+    target_server, target_port = await _echo_server()
+    operator, agent, _, _ = await _pair_direct()
+    socks_addr = await operator.start_socks5("127.0.0.1", 0)
+
+    real_pump_duplex = Channel.pump_duplex
+    call_count = {"n": 0}
+
+    async def flaky_pump_duplex(self, reader, writer):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            writer.close()  # a real failure mid-relay would still clean up its own socket
+            raise RuntimeError("simulated relay failure")
+        return await real_pump_duplex(self, reader, writer)
+
+    monkeypatch.setattr(Channel, "pump_duplex", flaky_pump_duplex)
+
+    with caplog.at_level(logging.ERROR):
+        r, w = await asyncio.open_connection("127.0.0.1", socks_addr[1])
+        w.write(bytes([0x05, 1, 0x00]))
+        await w.drain()
+        await r.readexactly(2)
+        hb = b"localhost"
+        req = bytes([0x05, 0x01, 0x00, 0x03, len(hb)]) + hb + target_port.to_bytes(2, "big")
+        w.write(req)
+        await w.drain()
+        await r.readexactly(4)
+        await r.readexactly(4 + 2)
+        # Give the agent's detached handler task a chance to run and fail.
+        await asyncio.sleep(0.2)
+        w.close()
+
+    assert any("relay error" in rec.message for rec in caplog.records), (
+        "exception in a detached channel-handler task must be logged, not swallowed"
+    )
+
+    # The acceptor loop must still be alive: a fresh connection has to
+    # succeed cleanly, proving one failed background task didn't take the
+    # whole loop (or the session) down with it.
     resp = await _socks5_roundtrip("127.0.0.1", socks_addr[1], "localhost", target_port, b"still-alive")
     assert resp == b"ECHO:still-alive"
 

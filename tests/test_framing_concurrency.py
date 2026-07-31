@@ -72,3 +72,5 @@ async def test_many_concurrent_senders_all_decrypt_correctly():
 
     framer_a.close()
     framer_b.close()
+    await framer_a.wait_closed()
+    await framer_b.wait_closed()
