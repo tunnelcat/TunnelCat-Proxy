@@ -17,6 +17,8 @@ traffic, even chained across multiple hops.
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e .
+source .venv/bin/activate
+tunnelcat --help
 ```
 
 Requires Python 3.11+.
