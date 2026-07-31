@@ -21,7 +21,10 @@ source .venv/bin/activate
 tunnelcat --help
 ```
 
-Requires Python 3.10+.
+Requires Python 3.8+. Tested against every 3.x minor version from 3.8
+through 3.14. Note that 3.8 and 3.9 are past upstream end-of-life (no
+security patches) — fine for a throwaway target box, worth avoiding for
+anything you control.
 
 ### Deploying the agent to a target (no pip/venv on the target)
 
