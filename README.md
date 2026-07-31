@@ -21,6 +21,34 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 
 Requires Python 3.11+.
 
+### Deploying the agent to a target (no pip/venv on the target)
+
+For the machine you're pivoting through, you usually don't want to (or
+can't) `pip install` anything. `scripts/build-agent-bundle.sh` packs
+`tunnelcat` and all its dependencies into a single self-contained
+`tunnelcat.pyz` file using [shiv](https://github.com/linkedin/shiv):
+
+```
+pip install shiv                      # build machine only
+scripts/build-agent-bundle.sh         # -> dist/tunnelcat.pyz (linux x86_64, py3.11 by default)
+scp dist/tunnelcat.pyz target-host:/tmp/tc
+ssh target-host '/tmp/tc agent join <link-from-operator>'
+```
+
+The target needs nothing but a matching `python3` already on it — no pip,
+no venv, no internet access, no build tooling. First invocation
+self-extracts to `~/.shiv/` and caches there; later runs skip that step.
+
+The bundle is built for a specific platform/Python ABI (`cryptography` and
+`msgpack` ship compiled extensions, so this isn't purely cross-platform).
+Check the target first with `python3 --version; uname -m`, then pass the
+matching platform/version if it's not linux x86_64 / Python 3.11, e.g.:
+
+```
+scripts/build-agent-bundle.sh manylinux2014_aarch64 311   # linux arm64, py3.11
+scripts/build-agent-bundle.sh manylinux2014_x86_64  312   # linux x86_64, py3.12
+```
+
 ## Architecture
 
 - **crypto/**: Noise_NNpsk0-inspired handshake (X25519 + ChaCha20-Poly1305
