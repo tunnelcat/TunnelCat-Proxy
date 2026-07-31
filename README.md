@@ -21,7 +21,7 @@ source .venv/bin/activate
 tunnelcat --help
 ```
 
-Requires Python 3.11+.
+Requires Python 3.10+.
 
 ### Deploying the agent to a target (no pip/venv on the target)
 

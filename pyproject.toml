@@ -2,7 +2,7 @@
 name = "tunnelcat"
 version = "0.1.0"
 description = "E2E-encrypted, paired SOCKS/port-forward tunneling for authorized pentest pivoting"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "cryptography>=42.0",
     "msgpack>=1.0",
