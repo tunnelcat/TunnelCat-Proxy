@@ -70,6 +70,13 @@ class Channel:
             # this runs once per frame for every channel.
             try:
                 self._inbound.put_nowait(data)
+                if data is None:
+                    # EOF delivered without ever touching _wire_intake, so
+                    # the drain task's own terminating sentinel will never
+                    # arrive there. It's idle (nothing left to drain), so
+                    # cancelling it now is safe and prevents it from
+                    # leaking as a permanently-pending task.
+                    self._drain_task.cancel()
                 return True
             except asyncio.QueueFull:
                 pass  # inbound is momentarily full, fall through to the slow path
