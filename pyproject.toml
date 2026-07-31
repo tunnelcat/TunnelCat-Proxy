@@ -1,0 +1,32 @@
+[project]
+name = "tunnelcat"
+version = "0.1.0"
+description = "E2E-encrypted, paired SOCKS/port-forward tunneling for authorized pentest pivoting"
+requires-python = ">=3.11"
+dependencies = [
+    "cryptography>=42.0",
+    "msgpack>=1.0",
+    "click>=8.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+]
+
+[project.scripts]
+tunnelcat = "tunnelcat.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tunnelcat"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 25
